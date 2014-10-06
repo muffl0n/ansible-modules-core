@@ -72,7 +72,20 @@ options:
       - If a SHA-256 checksum is passed to this parameter, the digest of the
         destination file will be calculated after it is downloaded to ensure
         its integrity and verify that the transfer completed successfully.
+        This option is deprecated. Use 'checksum'.
     version_added: "1.3"
+    required: false
+    default: null
+  checksum:
+    description:
+      - If a checksum is passed to this parameter, the digest of the
+        destination file will be calculated after it is downloaded to ensure
+        its integrity and verify that the transfer completed successfully.
+        Format: <algorithm>:<checksum>, e.g.: checksum="sha256:d98291acbedd510e3dbd36dbfdd83cbca8415220af43b327c0a0c574b6dc7b97"
+        If you worry about portability, only the sha1 algorithm is available 
+        on all platforms and python versions.  The third party hashlib 
+        library can be installed for access to additional algorithms.
+    version_added: "2.0"
     required: false
     default: null
   use_proxy:
@@ -144,15 +157,13 @@ EXAMPLES='''
 
 - name: download file with custom HTTP headers
   get_url: url=http://example.com/path/file.conf dest=/etc/foo.conf headers: 'key:value,key:value'
+
+- name: download file with check
+  get_url: url=http://example.com/path/file.conf dest=/etc/foo.conf checksum=sha256:b5bb9d8014a0f9b1d61e21e796d78dccdf1352f23cd32812f4850b878ae4944c
+  get_url: url=http://example.com/path/file.conf dest=/etc/foo.conf checksum=md5:66dffb5228a211e61d6d7ef4a86f5758
 '''
 
 import urlparse
-
-try:
-    import hashlib
-    HAS_HASHLIB=True
-except ImportError:
-    HAS_HASHLIB=False
 
 # ==============================================================
 # url handling
@@ -209,6 +220,28 @@ def extract_filename_from_headers(headers):
 
     return res
 
+def get_available_hash_algorithms():
+    available_hash_algorithms = dict()
+    try:
+        import hashlib
+
+        # python 2.7.9+ and 2.7.0+
+        for attribute in ('available_algorithms', 'algorithms'):
+            algorithms = getattr(hashlib, attribute, None)
+            if algorithms:
+                break
+        if algorithms is None:
+            # python 2.5+
+            algorithms = ('md5', 'sha1', 'sha224', 'sha256', 'sha384', 'sha512')
+        for algorithm in algorithms:
+            available_hash_algorithms[algorithm] = getattr(hashlib, algorithm)
+    except ImportError:
+        import md5
+        import sha
+        available_hash_algorithms = {'md5': md5.md5,
+                                     'sha1': sha.sha}
+    return available_hash_algorithms
+
 # ==============================================================
 # main
 
@@ -219,6 +252,7 @@ def main():
         url = dict(required=True),
         dest = dict(required=True),
         sha256sum = dict(default=''),
+        checksum = dict(default=''),
         timeout = dict(required=False, type='int', default=10),
         headers = dict(required=False, default=None),
     )
@@ -233,6 +267,7 @@ def main():
     dest = os.path.expanduser(module.params['dest'])
     force = module.params['force']
     sha256sum = module.params['sha256sum']
+    checksum = module.params['checksum']
     use_proxy = module.params['use_proxy']
     timeout = module.params['timeout']
     
@@ -248,23 +283,35 @@ def main():
     dest_is_dir = os.path.isdir(dest)
     last_mod_time = None
 
-    # Remove any non-alphanumeric characters, including the infamous
-    # Unicode zero-width space
-    stripped_sha256sum = re.sub(r'\W+', '', sha256sum)
+    # workaround for usage of deprecated sha256sum parameter
+    if sha256sum != '':
+        checksum = 'sha256:%s' % (sha256sum)
 
-    # Fail early if sha256 is not supported
-    if sha256sum != '' and not HAS_HASHLIB:
-        module.fail_json(msg="The sha256sum parameter requires hashlib, which is available in Python 2.5 and higher")
+    # checksum specified, parse for algorithm and checksum
+    if checksum != '':
+        try:
+            algorithm, checksum = checksum.rsplit(':', 1)
+            # Remove any non-alphanumeric characters, including the infamous
+            # Unicode zero-width space
+            checksum = re.sub(r'\W+', '', checksum).lower()
+            # Ensure the checksum portion is a hexdigest
+            int(checksum, 16)
+            digest_method = get_available_hash_algorithms()[algorithm]()
+        except ValueError:
+            module.fail_json(msg="The checksum parameter has to be in format <algorithm>:<checksum>")
+        except KeyError:
+            module.fail_json(msg="Could not hash with algorithm '%s'. Available algorithms: %s " %
+                                 (algorithm, ', '.join(get_available_hash_algorithms())))
 
     if not dest_is_dir and os.path.exists(dest):
         checksum_mismatch = False
 
         # If the download is not forced and there is a checksum, allow
         # checksum match to skip the download.
-        if not force and sha256sum != '':
-            destination_checksum = module.sha256(dest)
+        if not force and checksum != '':
+            destination_checksum = module.digest_from_file(dest, digest_method)
 
-            if stripped_sha256sum.lower() == destination_checksum:
+            if checksum == destination_checksum:
                 module.exit_json(msg="file already exists", dest=dest, url=url, changed=False)
 
             checksum_mismatch = True
@@ -330,14 +377,12 @@ def main():
     else:
         changed = False
 
-    # Check the digest of the destination file and ensure that it matches the
-    # sha256sum parameter if it is present
-    if sha256sum != '':
-        destination_checksum = module.sha256(dest)
+    if checksum != '':
+        destination_checksum = module.digest_from_file(dest, digest_method)
 
-        if stripped_sha256sum.lower() != destination_checksum:
+        if checksum != destination_checksum:
             os.remove(dest)
-            module.fail_json(msg="The SHA-256 checksum for %s did not match %s; it was %s." % (dest, sha256sum, destination_checksum))
+            module.fail_json(msg="The checksum for %s did not match %s; it was %s." % (dest, checksum, destination_checksum))
 
     os.remove(tmpsrc)
 
@@ -354,9 +399,8 @@ def main():
         md5sum = None
 
     # Mission complete
-
-    module.exit_json(url=url, dest=dest, src=tmpsrc, md5sum=md5sum, checksum=checksum_src,
-        sha256sum=sha256sum, changed=changed, msg=info.get('msg', ''))
+    module.exit_json(url=url, dest=dest, src=tmpsrc, md5sum=md5sum, checksum_src=checksum_src,
+        checksum_dest=checksum_dest, changed=changed, msg=info.get('msg', ''))
 
 # import module snippets
 from ansible.module_utils.basic import *
