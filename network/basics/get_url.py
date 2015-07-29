@@ -236,10 +236,14 @@ def get_available_hash_algorithms():
         for algorithm in algorithms:
             available_hash_algorithms[algorithm] = getattr(hashlib, algorithm)
     except ImportError:
-        import md5
         import sha
-        available_hash_algorithms = {'md5': md5.md5,
-                                     'sha1': sha.sha}
+        available_hash_algorithms = {'sha1': sha.sha}
+        try:
+            import md5
+            available_hash_algorithms['md5'] = md5.md5
+        except ImportError:
+            pass
+
     return available_hash_algorithms
 
 # ==============================================================
