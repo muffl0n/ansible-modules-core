@@ -304,7 +304,7 @@ def main():
         except ValueError:
             module.fail_json(msg="The checksum parameter has to be in format <algorithm>:<checksum>")
         except KeyError:
-            module.fail_json(msg="Could not hash with algorithm '%s'. Available algorithms: %s " %
+            module.fail_json(msg="Could not hash with algorithm '%s'. Available algorithms: %s" %
                                  (algorithm, ', '.join(get_available_hash_algorithms())))
 
     if not dest_is_dir and os.path.exists(dest):
