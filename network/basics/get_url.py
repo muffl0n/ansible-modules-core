@@ -317,7 +317,7 @@ def main():
 
             checksum_mismatch = True
 
-        # Not forcing redownload, unless sha256sum has already failed
+        # Not forcing redownload, unless checksum does not match
         if not force and not checksum_mismatch:
             module.exit_json(msg="file already exists", dest=dest, url=url, changed=False)
 
