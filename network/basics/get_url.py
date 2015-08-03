@@ -217,31 +217,6 @@ def extract_filename_from_headers(headers):
 
     return res
 
-def get_available_hash_algorithms():
-    available_hash_algorithms = dict()
-    try:
-        import hashlib
-
-        # python 2.7.9+ and 2.7.0+
-        for attribute in ('available_algorithms', 'algorithms'):
-            algorithms = getattr(hashlib, attribute, None)
-            if algorithms:
-                break
-        if algorithms is None:
-            # python 2.5+
-            algorithms = ('md5', 'sha1', 'sha224', 'sha256', 'sha384', 'sha512')
-        for algorithm in algorithms:
-            available_hash_algorithms[algorithm] = getattr(hashlib, algorithm)
-    except ImportError:
-        import sha
-        available_hash_algorithms = {'sha1': sha.sha}
-        try:
-            import md5
-            available_hash_algorithms['md5'] = md5.md5
-        except ImportError:
-            pass
-
-    return available_hash_algorithms
 
 # ==============================================================
 # main
@@ -297,12 +272,9 @@ def main():
             checksum = re.sub(r'\W+', '', checksum).lower()
             # Ensure the checksum portion is a hexdigest
             int(checksum, 16)
-            digest_method = get_available_hash_algorithms()[algorithm]()
         except ValueError:
             module.fail_json(msg="The checksum parameter has to be in format <algorithm>:<checksum>")
-        except KeyError:
-            module.fail_json(msg="Could not hash with algorithm '%s'. Available algorithms: %s" %
-                                 (algorithm, ', '.join(get_available_hash_algorithms())))
+
 
     if not dest_is_dir and os.path.exists(dest):
         checksum_mismatch = False
@@ -310,7 +282,7 @@ def main():
         # If the download is not forced and there is a checksum, allow
         # checksum match to skip the download.
         if not force and checksum != '':
-            destination_checksum = module.digest_from_file(dest, digest_method)
+            destination_checksum = module.digest_from_file(dest, algorithm)
 
             if checksum == destination_checksum:
                 module.exit_json(msg="file already exists", dest=dest, url=url, changed=False)
@@ -379,7 +351,7 @@ def main():
         changed = False
 
     if checksum != '':
-        destination_checksum = module.digest_from_file(dest, digest_method)
+        destination_checksum = module.digest_from_file(dest, algorithm)
 
         if checksum != destination_checksum:
             os.remove(dest)
